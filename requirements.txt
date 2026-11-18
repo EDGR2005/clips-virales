@@ -1,0 +1,8 @@
+openai-whisper
+argostranslate
+mediapipe==0.10.14
+opencv-python
+numpy
+websockets
+# Opcional, solo si Cloudflare bloquea la API de Kick:
+# curl_cffi

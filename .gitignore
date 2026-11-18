@@ -1,0 +1,22 @@
+# Secretos: cookies de sesión de YouTube
+cookies.txt
+*.cookies
+.env
+
+# Videos, audios y subtítulos (pesados / generados)
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.mp3
+*.wav
+*.srt
+clips/
+picos/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*-env/
