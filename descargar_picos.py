@@ -107,18 +107,22 @@ def main():
             continue
         if canal not in cache:
             cache[canal] = vods_twitch(canal, a.vods)
-        vod = next((v for v in cache[canal]
-                    if v["inicio"] <= ini and fin <= v["inicio"] + v["dur"]), None)
-        if not vod:
+        def buscar():
+            # Basta con que el VOD contenga el inicio; el final se recorta al del VOD
+            # (pasa con picos justo al terminar el directo).
+            return next((v for v in cache[canal]
+                         if v["inicio"] <= ini < v["inicio"] + v["dur"] - 5), None)
+        vod = buscar()
+        if not vod or fin > vod["inicio"] + vod["dur"]:
             # El VOD en curso crece: recargar por si el pico es muy reciente
             cache[canal] = vods_twitch(canal, a.vods)
-            vod = next((v for v in cache[canal]
-                        if v["inicio"] <= ini and fin <= v["inicio"] + v["dur"]), None)
+            vod = buscar()
         if not vod:
             print(f"[{canal}] pico {r['reloj_ini']}: ningún VOD lo contiene (¿otra fecha? usa --fecha)")
             fallos += 1
             continue
-        desde, hasta = ini - vod["inicio"], fin - vod["inicio"]
+        desde = ini - vod["inicio"]
+        hasta = min(fin, vod["inicio"] + vod["dur"]) - vod["inicio"]
         print(f"[{canal}] pico {r['reloj_ini']} (puntaje {r['puntaje']}) -> "
               f"{vod['url']} {hms(desde)}-{hms(hasta)}")
         cmd = ["yt-dlp", "--no-warnings", "--quiet", "--progress",
