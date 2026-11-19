@@ -38,6 +38,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,8 +51,9 @@ HYPE = re.compile(
     re.I,
 )
 KICK_EMOTE = re.compile(r"\[emote:\d+:([^\]]+)\]")
-KICK_PUSHER = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
-               "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
+# Desde octubre de 2026 Kick sirve el chat con Centrifugo (antes era Pusher).
+KICK_WS = "wss://realtime.us-east-1.platform.kick.com/connection/websocket"
+KICK_TOKEN = "https://web.kick.com/api/v1/realtime/auth/connection"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/124.0 Safari/537.36")
 
@@ -266,13 +268,31 @@ async def viewers_twitch(f, cid, secreto, cada):
         await asyncio.sleep(cada)
 
 
-def kick_info(slug):
-    url = f"https://kick.com/api/v2/channels/{urllib.parse.quote(slug)}"
+def _kick_http(url, body=None):
+    """GET (o POST JSON si hay body). Usa curl_cffi si está, por Cloudflare."""
     try:
         from curl_cffi import requests as cr
-        return cr.get(url, impersonate="chrome", timeout=15).json()
+        if body is None:
+            r = cr.get(url, impersonate="chrome", timeout=15)
+        else:
+            r = cr.post(url, json=body, impersonate="chrome", timeout=15)
+        r.raise_for_status()
+        return r.json()
     except ImportError:
-        return http_json(url, {"User-Agent": UA, "Accept": "application/json"})
+        hdr = {"User-Agent": UA, "Accept": "application/json"}
+        if body is None:
+            return http_json(url, hdr)
+        hdr["Content-Type"] = "application/json"
+        return http_json(url, hdr, json.dumps(body).encode())
+
+
+def kick_info(slug):
+    return _kick_http(f"https://kick.com/api/v2/channels/{urllib.parse.quote(slug)}")
+
+
+def kick_token():
+    """Token anónimo (invitado) para leer el chat."""
+    return _kick_http(KICK_TOKEN, {"client_id": str(uuid.uuid4())})["data"]["token"]
 
 
 async def sondeo_kick(f, cada):
@@ -284,12 +304,28 @@ async def sondeo_kick(f, cada):
                 f.chatroom_id = info["chatroom"]["id"]
             live = info.get("livestream")
             f.viewers = live["viewer_count"] if live else None
+            if live and live.get("start_time"):
+                f.inicio_stream = datetime.strptime(
+                    live["start_time"], "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone.utc).timestamp()
+            if live is None and not avisado:
+                print(f"[{f.nombre}] el canal no está en directo ahora mismo")
+                avisado = True
         except Exception as e:
             if not avisado and f.chatroom_id is None:
                 print(f"[{f.nombre}] no pude consultar la API de Kick ({e}). "
                       "Prueba pip install curl_cffi o pasa --kick-chatroom-id.")
                 avisado = True
         await asyncio.sleep(cada)
+
+
+def _kick_evento(f, ev, datos):
+    if ev.endswith("ChatMessageEvent"):
+        d = json.loads(datos) if isinstance(datos, str) else datos
+        texto = KICK_EMOTE.sub(r"\1", d.get("content", ""))
+        f.mensaje(d["sender"]["username"], texto)
+    elif ev.endswith(("SubscriptionEvent", "GiftedSubscriptionsEvent", "StreamHostEvent")):
+        f.evento()
 
 
 async def chat_kick(f):
@@ -299,23 +335,36 @@ async def chat_kick(f):
         await asyncio.sleep(1)
     while True:
         try:
-            async with websockets.connect(KICK_PUSHER) as ws:
-                await ws.send(json.dumps({"event": "pusher:subscribe", "data": {
-                    "auth": "", "channel": f"chatrooms.{f.chatroom_id}.v2"}}))
+            token = await asyncio.to_thread(kick_token)
+            async with websockets.connect(KICK_WS, origin="https://kick.com",
+                                          user_agent_header=UA) as ws:
+                await ws.send(json.dumps({"connect": {"token": token}, "id": 1}))
+                resp = json.loads(await asyncio.wait_for(ws.recv(), 15))
+                if "error" in resp:
+                    raise RuntimeError(f"connect rechazado: {resp['error']}")
+                await ws.send(json.dumps({"subscribe": {
+                    "channel": f"chatrooms.{f.chatroom_id}.v2"}, "id": 2}))
                 print(f"[{f.nombre}] chat conectado")
                 espera = 2
                 async for raw in ws:
-                    msg = json.loads(raw)
-                    ev = msg.get("event", "")
-                    if ev == "pusher:ping":
-                        await ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
-                    elif ev.endswith("ChatMessageEvent"):
-                        d = json.loads(msg["data"])
-                        texto = KICK_EMOTE.sub(r"\1", d.get("content", ""))
-                        f.mensaje(d["sender"]["username"], texto)
-                    elif ev.endswith(("SubscriptionEvent", "GiftedSubscriptionsEvent",
-                                      "StreamHostEvent")):
-                        f.evento()
+                    # Centrifugo puede mandar varios JSON por trama, uno por línea
+                    for linea in raw.splitlines():
+                        linea = linea.strip()
+                        if not linea:
+                            continue
+                        if linea == "{}":          # ping del servidor
+                            await ws.send("{}")
+                            continue
+                        msg = json.loads(linea)
+                        if "error" in msg:
+                            print(f"[{f.nombre}] error de Kick: {msg['error']}")
+                            continue
+                        pub = msg.get("push", {}).get("pub", {}).get("data")
+                        if isinstance(pub, dict):
+                            try:
+                                _kick_evento(f, pub.get("event", ""), pub.get("data", "{}"))
+                            except (KeyError, ValueError, TypeError):
+                                pass
         except Exception as e:
             print(f"[{f.nombre}] chat desconectado ({e}); reintento en {espera}s")
         await asyncio.sleep(espera)

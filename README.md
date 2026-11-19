@@ -201,9 +201,10 @@ Los archivos quedan en `picos/`:
   ```
 
   Sin ellas usa solo el chat, que suele ser la señal más fuerte. Con ellas, el rango se da en tiempo del VOD (desde el inicio del directo).
-- **Kick:** usa su API no oficial y Cloudflare puede bloquearla. Si pasa, instala `pip install curl_cffi` o pasa `--kick-chatroom-id`.
-- **Estado de las pruebas:** el detector está probado con datos sintéticos (`--demo`). La conexión real a Twitch y Kick no se ha probado en un directo; si algo falla, el mensaje de error sale en la consola.
-- En Kick, o en Twitch sin credenciales, no se conoce la hora de inicio del directo. El rango se da entonces como tiempo desde que arrancó el monitor (`monitor`) y como hora del reloj.
+- **Kick:** usa su API no oficial, sin cuenta. Da espectadores y hora de inicio del directo, así que el rango sale en tiempo del VOD. Desde octubre de 2026 el chat de Kick va por Centrifugo (antes Pusher); si Kick vuelve a cambiarlo, el chat dejará de conectar y habrá que actualizar `chat_kick()`. `curl_cffi` evita bloqueos de Cloudflare.
+- **Estado de las pruebas:** probado en noviembre de 2026 con directos reales de Twitch y Kick (chat y espectadores de Kick). Los espectadores de Twitch con credenciales no se han probado.
+- En Twitch sin credenciales no se conoce la hora de inicio del directo. El rango se da entonces como tiempo desde que arrancó el monitor (`monitor`) y como hora del reloj.
+- Los primeros 90 s el puntaje sale en `0.0`: es el calentamiento, no un fallo.
 
 ---
 
@@ -239,7 +240,8 @@ Los archivos quedan en `picos/`:
 | `CUDA out of memory` | Usa un modelo más pequeño. |
 | `ModuleNotFoundError: websockets` | `pip install -r requirements.txt` con el entorno activado. |
 | El monitor no detecta nada | Espera el calentamiento de 90 s, baja `--umbral` o `--min-msgs`. |
-| Kick no conecta | Ver sección 5, apartado Kick. |
+| Kick: `App key ... not in this cluster` | Versión vieja del script (Pusher). Haz `git pull`. |
+| Kick no conecta | Instala `curl_cffi` y revisa la sección 5, apartado Kick. |
 | `No such file or directory` en FFmpeg | El nombre del archivo no coincide. Si tiene espacios, ponlo entre comillas. |
 | YouTube pide iniciar sesión | Usa `--cookies-from-browser` en yt-dlp (ver `docs/guia_manual.md`). **Nunca subas `cookies.txt` a GitHub**, ya está en `.gitignore`. |
 
