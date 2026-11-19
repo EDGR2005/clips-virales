@@ -371,14 +371,146 @@ async def chat_kick(f):
         espera = min(espera * 2, 60)
 
 
+# ---------------------------------------------------------------- grabación
+
+URLS = {"twitch": "https://www.twitch.tv/{}", "kick": "https://kick.com/{}"}
+
+
+async def _salida(*cmd):
+    p = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = await p.communicate()
+    return p.returncode, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+async def duracion(ruta):
+    rc, out, _ = await _salida("ffprobe", "-v", "error", "-show_entries", "format=duration",
+                               "-of", "default=nw=1:nk=1", str(ruta))
+    try:
+        return float(out.strip())
+    except ValueError:
+        return None
+
+
+class Grabador:
+    """Graba el directo con yt-dlp en .ts (se puede leer mientras crece) y corta
+    los rangos de los picos. Si el directo se corta, abre una grabación nueva."""
+
+    def __init__(self, f, carpeta, calidad):
+        self.f, self.carpeta, self.calidad = f, carpeta, calidad
+        self.grabaciones = []   # {"ruta", "proc", "activa", "t_fin"}
+        self.tareas = set()
+
+    async def correr(self):
+        import shutil
+        ytdlp = shutil.which("yt-dlp")
+        if not ytdlp:
+            print(f"[{self.f.nombre}] no encuentro yt-dlp: no se grabará")
+            return
+        url = URLS[self.f.plataforma].format(self.f.canal)
+        avisado = False
+        while True:
+            ruta = self.carpeta / (f"{self.f.plataforma}_{self.f.canal}_"
+                                   f"{datetime.now():%Y%m%d_%H%M%S}.ts")
+            proc = await asyncio.create_subprocess_exec(
+                ytdlp, "--no-part", "--hls-use-mpegts", "-f", self.calidad,
+                "--quiet", "--no-warnings", "-o", str(ruta), url,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                start_new_session=True)   # grupo propio: así se puede matar también ffmpeg
+            g = {"ruta": ruta, "proc": proc, "activa": True, "t_fin": None}
+            while proc.returncode is None and not (ruta.exists() and ruta.stat().st_size):
+                try:
+                    await asyncio.wait_for(proc.wait(), 0.5)
+                except asyncio.TimeoutError:
+                    pass
+            if ruta.exists() and ruta.stat().st_size:
+                self.grabaciones.append(g)
+                print(f"[{self.f.nombre}] grabando en {ruta}")
+                avisado = False
+                await proc.wait()
+                g["activa"], g["t_fin"] = False, time.time()
+                print(f"[{self.f.nombre}] la grabación se detuvo; reintento en 15 s")
+                await asyncio.sleep(15)
+            else:
+                err = (await proc.stderr.read()).decode(errors="replace").strip()
+                if not avisado:
+                    ultima = err.splitlines()[-1] if err else "sin detalle"
+                    print(f"[{self.f.nombre}] no pude grabar ({ultima}). "
+                          "Reintento cada 60 s hasta que esté en directo.")
+                    avisado = True
+                await asyncio.sleep(60)
+
+    def detener(self, borrar=False):
+        import os
+        import signal
+
+        def matar(pgid, sig):
+            try:
+                os.killpg(pgid, sig)
+                return True
+            except ProcessLookupError:
+                return False
+
+        vivos = [g["proc"].pid for g in self.grabaciones if g["activa"]]
+        for pgid in vivos:
+            matar(pgid, signal.SIGTERM)
+        fin = time.time() + 3
+        while vivos and time.time() < fin:
+            time.sleep(0.2)
+            vivos = [p for p in vivos if matar(p, 0)]
+        for pgid in vivos:              # ffmpeg a veces ignora SIGTERM
+            matar(pgid, signal.SIGKILL)
+        if borrar:
+            time.sleep(0.5)
+            for g in self.grabaciones:
+                g["ruta"].unlink(missing_ok=True)
+
+    async def _tramo(self, ini, fin):
+        """Busca la grabación que contiene [ini, fin] y devuelve (ruta, desde, dur)."""
+        for g in reversed(self.grabaciones):
+            fin_g = time.time() if g["activa"] else g["t_fin"]
+            d = await duracion(g["ruta"])
+            if not d:
+                continue
+            t0 = fin_g - d   # el final del archivo corresponde a "ahora"
+            if t0 < fin and ini < fin_g:
+                desde = max(ini, t0) - t0
+                return g["ruta"], desde, min(fin, fin_g) - t0 - desde
+        return None
+
+    def programar(self, pico, destino):
+        t = asyncio.create_task(self._cortar(pico, destino))
+        self.tareas.add(t)
+        t.add_done_callback(self.tareas.discard)
+
+    async def _cortar(self, pico, destino):
+        # Esperar a que el final del rango ya esté escrito en la grabación
+        await asyncio.sleep(max(0, pico["fin"] + 8 - time.time()))
+        tramo = await self._tramo(pico["ini"], pico["fin"])
+        if not tramo:
+            print(f"[{self.f.nombre}] el pico de {reloj(pico['ini'])} no está en "
+                  "ninguna grabación; no se generó clip")
+            return
+        ruta, desde, dur = tramo
+        rc, _, err = await _salida(
+            "ffmpeg", "-y", "-v", "error", "-ss", f"{desde:.2f}", "-i", str(ruta),
+            "-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-movflags", "+faststart", str(destino))
+        if rc == 0:
+            print(f"[{self.f.nombre}] clip guardado: {destino} ({dur:.0f} s)")
+        else:
+            print(f"[{self.f.nombre}] falló el corte de {destino.name}: {err.strip()[-200:]}")
+
+
 # ---------------------------------------------------------------- salida
 
-def anunciar(f, pico, salida_jsonl):
+def anunciar(f, pico, salida_jsonl, clip=None):
     base, etiqueta = f.base_tiempo()
     ini, fin = pico["ini"] - base, pico["fin"] - base
     registro = {"fuente": f.nombre, "reloj_ini": reloj(pico["ini"]), "reloj_fin": reloj(pico["fin"]),
                 f"{etiqueta}_ini": hms(ini), f"{etiqueta}_fin": hms(fin),
-                "duracion_s": round(pico["fin"] - pico["ini"]), **{
+                "duracion_s": round(pico["fin"] - pico["ini"]),
+                "clip": str(clip) if clip else None, **{
                     k: pico[k] for k in ("puntaje", "mensajes", "viewers_inicio",
                                          "viewers_max", "detalle_z", "ejemplos")}}
     with open(salida_jsonl, "a", encoding="utf-8") as fh:
@@ -394,11 +526,21 @@ def anunciar(f, pico, salida_jsonl):
     print()
 
 
-async def ciclo(f, det, a, salida):
+async def ciclo(f, det, a, salida, grab=None):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ruta_csv = salida / f"{f.plataforma}_{f.canal}_{stamp}_muestras.csv"
     ruta_jsonl = salida / "picos.jsonl"
     ultimo_estado = 0
+
+    def emitir(pico):
+        clip = None
+        if grab:
+            clip = salida / "clips" / (f"{f.plataforma}_{f.canal}_"
+                                       f"{datetime.fromtimestamp(pico['ini']):%Y%m%d_%H%M%S}"
+                                       f"_p{pico['puntaje']:.0f}.mp4")
+            clip.parent.mkdir(exist_ok=True)
+            grab.programar(pico, clip)
+        anunciar(f, pico, ruta_jsonl, clip)
     with open(ruta_csv, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["reloj", "mensajes", "unicos", "hype", "viewers", "puntaje"])
@@ -410,7 +552,7 @@ async def ciclo(f, det, a, salida):
                 w.writerow([reloj(m.t), m.msgs, m.uniq, m.hype, m.viewers, round(s, 2)])
                 fh.flush()
                 if pico:
-                    anunciar(f, pico, ruta_jsonl)
+                    emitir(pico)
                 if a.verbose or m.t - ultimo_estado >= 30:
                     ultimo_estado = m.t
                     print(f"[{reloj(m.t)}] {f.nombre}: {m.msgs} msgs, {m.uniq} chatters, "
@@ -418,7 +560,7 @@ async def ciclo(f, det, a, salida):
         finally:
             pico = det.flush()
             if pico:
-                anunciar(f, pico, ruta_jsonl)
+                anunciar(f, pico, ruta_jsonl)   # al salir ya no da tiempo a cortar
 
 
 def crear_detector(a):
@@ -430,11 +572,20 @@ async def monitorear(a):
     import os
     salida = Path(a.salida)
     salida.mkdir(parents=True, exist_ok=True)
-    tareas = []
+    tareas, grabadores = [], []
     cid, secreto = os.environ.get("TWITCH_CLIENT_ID"), os.environ.get("TWITCH_CLIENT_SECRET")
+
+    def grabador(f):
+        if not a.grabar:
+            return None
+        g = Grabador(f, salida, a.calidad)
+        grabadores.append(g)
+        tareas.append(g.correr())
+        return g
+
     for canal in a.twitch:
         f = Fuente("twitch", canal)
-        tareas += [chat_twitch(f), ciclo(f, crear_detector(a), a, salida)]
+        tareas += [chat_twitch(f), ciclo(f, crear_detector(a), a, salida, grabador(f))]
         if cid and secreto:
             tareas.append(viewers_twitch(f, cid, secreto, a.sondeo))
         else:
@@ -442,10 +593,16 @@ async def monitorear(a):
     for canal in a.kick:
         f = Fuente("kick", canal)
         f.chatroom_id = a.kick_chatroom_id
-        tareas += [chat_kick(f), sondeo_kick(f, a.sondeo), ciclo(f, crear_detector(a), a, salida)]
+        tareas += [chat_kick(f), sondeo_kick(f, a.sondeo),
+                   ciclo(f, crear_detector(a), a, salida, grabador(f))]
     print("Monitoreando... Ctrl+C para terminar. "
-          f"Umbral {a.umbral}, bin {a.bin}s, calentamiento ~90s.")
-    await asyncio.gather(*tareas)
+          f"Umbral {a.umbral}, bin {a.bin}s, calentamiento ~90s."
+          + (f" Grabando y guardando clips en {salida / 'clips'}." if a.grabar else ""))
+    try:
+        await asyncio.gather(*tareas)
+    finally:
+        for g in grabadores:
+            g.detener(borrar=a.borrar_grabacion)
 
 
 # ---------------------------------------------------------------- demo
@@ -497,6 +654,12 @@ def main():
     ap.add_argument("--min-msgs", type=int, default=5, help="mensajes mínimos por bin para abrir un pico")
     ap.add_argument("--sondeo", type=int, default=20, help="segundos entre consultas de espectadores")
     ap.add_argument("--salida", default="picos")
+    ap.add_argument("--grabar", action="store_true",
+                    help="grabar el directo con yt-dlp y cortar un clip por cada pico")
+    ap.add_argument("--calidad", default="best[height<=1080]/best",
+                    help="formato de yt-dlp para la grabación (ej. 'best[height<=720]')")
+    ap.add_argument("--borrar-grabacion", action="store_true",
+                    help="borrar la grabación completa al terminar (los clips se conservan)")
     ap.add_argument("--verbose", action="store_true", help="imprimir cada bin")
     ap.add_argument("--demo", action="store_true", help="probar el detector con datos sintéticos")
     a = ap.parse_args()

@@ -164,6 +164,37 @@ python3 monitor_directos.py --demo
 
 Déjalo corriendo mientras dura el directo. `Ctrl+C` lo termina.
 
+### 5.1 Guardar los clips automáticamente (`--grabar`)
+
+Con `--grabar`, el monitor graba el directo con `yt-dlp` mientras vigila el chat. Cuando se cierra un pico, corta ese rango de la grabación y lo guarda como `.mp4`, sin que hagas nada.
+
+```bash
+python3 monitor_directos.py --twitch nombre_canal --grabar
+python3 monitor_directos.py --twitch nombre_canal --grabar --calidad "best[height<=720]" --borrar-grabacion
+```
+
+| Opción | Por defecto | Qué hace |
+|---|---|---|
+| `--grabar` | apagado | Graba el directo y corta un clip por cada pico. |
+| `--calidad` | `best[height<=1080]/best` | Formato de yt-dlp. `best[height<=720]` ocupa la mitad. |
+| `--borrar-grabacion` | apagado | Al terminar borra la grabación completa y conserva solo los clips. |
+
+Resultados en `picos/`:
+- `clips/<plataforma>_<canal>_<fecha_hora>_p<puntaje>.mp4`: un clip horizontal por pico, listo para pasarlo a `hacer_clips.py`.
+- `<plataforma>_<canal>_<fecha_hora>.ts`: la grabación completa del directo.
+- `picos.jsonl`: cada pico incluye el campo `clip` con la ruta del archivo.
+
+Cómo funciona y qué tener en cuenta:
+- El clip se corta unos 8 s después de terminar el pico, para asegurar que ese tramo ya está grabado.
+- La grabación empieza cuando lanzas el monitor, no desde el inicio del directo. Si el canal todavía no está en vivo, reintenta cada 60 s. Si el directo se corta, abre una grabación nueva.
+- **Disco:** a 1080p60 son unos 3,5 GB por hora y a 720p unos 1,5 GB por hora. Revisa el espacio libre antes de dejarlo toda la noche.
+- Un pico que sigue abierto al pulsar `Ctrl+C` queda anotado en `picos.jsonl`, pero sin clip.
+- La alineación entre chat y video es aproximada, del orden de unos pocos segundos. El margen de `--antes` lo cubre.
+- Sin suscripción, los anuncios de Twitch pueden quedar dentro de la grabación.
+- Solo está probado con Twitch. La grabación de Kick usa el mismo mecanismo de yt-dlp, pero no está probada.
+
+Para pasarlos a vertical con subtítulos, ejecuta `hacer_clips.py` sobre cada clip. Como esos clips suelen durar menos de 40 s, baja antes la constante `DURACION` de `hacer_clips.py`, o el script dirá que el video no alcanza.
+
 | Opción | Por defecto | Qué hace |
 |---|---|---|
 | `--twitch CANAL ...` | | Canales de Twitch. |
@@ -209,6 +240,8 @@ Los archivos quedan en `picos/`:
 ---
 
 ## 6. Del pico al clip final
+
+Con `--grabar` (sección 5.1) los clips ya salen solos. Sin esa opción, el proceso manual es:
 
 1. Con el monitor, anota el rango (por ejemplo VOD `01:12:09 - 01:13:09`).
 2. Baja ese fragmento. Para un VOD de Twitch o un video de YouTube:
