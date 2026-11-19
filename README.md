@@ -6,6 +6,7 @@ Herramientas en Python para convertir directos y videos largos en clips vertical
 |---|---|
 | `monitor_directos.py` | Vigila el chat y la audiencia de un directo (Twitch / Kick) y avisa en qué rangos de tiempo hubo picos, o sea, posibles clips virales. |
 | `hacer_clips.py` | Corta un video en clips de 40 s, los pasa a vertical, los transcribe con Whisper, traduce si hace falta y pega los subtítulos. |
+| `descargar_picos.py` | Baja desde el VOD de Twitch los picos que anotó el monitor. |
 | `seguir_caras.py` | Reencuadre vertical que sigue a la persona que habla (se usa desde `hacer_clips.py` con `--seguir-caras` o por separado). |
 | `docs/guia_manual.md` | Guía paso a paso con comandos sueltos de yt-dlp, FFmpeg y Whisper. |
 
@@ -239,9 +240,32 @@ Los archivos quedan en `picos/`:
 
 ---
 
+### 5.2 Descargar los picos desde el VOD (`descargar_picos.py`)
+
+Si monitoreaste sin `--grabar`, este script baja los picos de `picos/picos.jsonl` desde el VOD de Twitch. Funciona también con el directo todavía en curso, porque Twitch va publicando el VOD mientras se transmite. No hace falta parar el monitor.
+
+```bash
+python3 descargar_picos.py                         # todos los canales de Twitch del jsonl
+python3 descargar_picos.py --canal nombre_canal
+python3 descargar_picos.py --canal nombre_canal --calidad "best[height<=720]" --margen 5
+```
+
+| Opción | Por defecto | Qué hace |
+|---|---|---|
+| `--canal` | todos | Solo los picos de ese canal. |
+| `--calidad` | `best[height<=1080]/best` | Formato de yt-dlp. |
+| `--margen` | `0` | Segundos extra antes y después de cada pico. |
+| `--fecha AAAA-MM-DD` | hoy | Día de los picos, solo para registros antiguos sin fecha. |
+| `--cookies-from-browser` | | Para VODs solo de suscriptores (ej. `firefox`). |
+| `--salida` | `picos/clips` | Carpeta de los clips. |
+
+- Se puede ejecutar varias veces. Los clips que ya existen se saltan, así que solo baja los picos nuevos.
+- Necesita que el canal guarde VODs. Si los tiene desactivados, usa `--grabar` en el monitor.
+- Por ahora solo funciona con Twitch.
+
 ## 6. Del pico al clip final
 
-Con `--grabar` (sección 5.1) los clips ya salen solos. Sin esa opción, el proceso manual es:
+Con `--grabar` (sección 5.1) o `descargar_picos.py` (sección 5.2) los clips se bajan solos. El proceso manual es:
 
 1. Con el monitor, anota el rango (por ejemplo VOD `01:12:09 - 01:13:09`).
 2. Baja ese fragmento. Para un VOD de Twitch o un video de YouTube:

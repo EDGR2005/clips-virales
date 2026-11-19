@@ -510,6 +510,7 @@ def anunciar(f, pico, salida_jsonl, clip=None):
     registro = {"fuente": f.nombre, "reloj_ini": reloj(pico["ini"]), "reloj_fin": reloj(pico["fin"]),
                 f"{etiqueta}_ini": hms(ini), f"{etiqueta}_fin": hms(fin),
                 "duracion_s": round(pico["fin"] - pico["ini"]),
+                "t_ini": round(pico["ini"], 1), "t_fin": round(pico["fin"], 1),
                 "clip": str(clip) if clip else None, **{
                     k: pico[k] for k in ("puntaje", "mensajes", "viewers_inicio",
                                          "viewers_max", "detalle_z", "ejemplos")}}
