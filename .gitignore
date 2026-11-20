@@ -20,3 +20,6 @@ __pycache__/
 .venv/
 venv/
 *-env/
+
+# Estado del panel web
+panel_canales.json

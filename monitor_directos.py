@@ -176,6 +176,10 @@ class Fuente:
         self.inicio_stream = None   # epoch de inicio del directo, si se conoce
         self.viewers = None
         self.chatroom_id = None
+        # Estado legible desde fuera (lo usa panel.py)
+        self.chat = "conectando"
+        self.ultimo = None          # última muestra: msgs, viewers, puntaje, t
+        self.n_picos = 0
         self._reset()
 
     def _reset(self):
@@ -221,6 +225,7 @@ async def chat_twitch(f):
                 await ws.send(f"NICK justinfan{random.randint(10000, 99999)}")
                 await ws.send(f"JOIN #{f.canal.lower()}")
                 print(f"[{f.nombre}] chat conectado")
+                f.chat = "conectado"
                 espera = 2
                 async for raw in ws:
                     for linea in raw.split("\r\n"):
@@ -239,6 +244,7 @@ async def chat_twitch(f):
                             f.evento()
         except Exception as e:
             print(f"[{f.nombre}] chat desconectado ({e}); reintento en {espera}s")
+            f.chat = f"reconectando ({str(e)[:80]})"
         await asyncio.sleep(espera)
         espera = min(espera * 2, 60)
 
@@ -345,6 +351,7 @@ async def chat_kick(f):
                 await ws.send(json.dumps({"subscribe": {
                     "channel": f"chatrooms.{f.chatroom_id}.v2"}, "id": 2}))
                 print(f"[{f.nombre}] chat conectado")
+                f.chat = "conectado"
                 espera = 2
                 async for raw in ws:
                     # Centrifugo puede mandar varios JSON por trama, uno por línea
@@ -367,6 +374,7 @@ async def chat_kick(f):
                                 pass
         except Exception as e:
             print(f"[{f.nombre}] chat desconectado ({e}); reintento en {espera}s")
+            f.chat = f"reconectando ({str(e)[:80]})"
         await asyncio.sleep(espera)
         espera = min(espera * 2, 60)
 
@@ -541,6 +549,7 @@ async def ciclo(f, det, a, salida, grab=None):
                                        f"_p{pico['puntaje']:.0f}.mp4")
             clip.parent.mkdir(exist_ok=True)
             grab.programar(pico, clip)
+        f.n_picos += 1
         anunciar(f, pico, ruta_jsonl, clip)
     with open(ruta_csv, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -552,6 +561,10 @@ async def ciclo(f, det, a, salida, grab=None):
                 s, pico = det.push(m)
                 w.writerow([reloj(m.t), m.msgs, m.uniq, m.hype, m.viewers, round(s, 2)])
                 fh.flush()
+                f.ultimo = {"t": m.t, "msgs": m.msgs, "uniq": m.uniq, "hype": m.hype,
+                            "viewers": m.viewers, "puntaje": round(s, 2),
+                            "calentando": len(det.hist["msgs"]) < det.calentar,
+                            "en_pico": det.ev is not None}
                 if pico:
                     emitir(pico)
                 if a.verbose or m.t - ultimo_estado >= 30:
@@ -641,7 +654,7 @@ def demo(a):
     return 0 if len(cierres) == 2 else 1
 
 
-def main():
+def crear_parser():
     ap = argparse.ArgumentParser(description="Detector de picos de chat/audiencia para clips")
     ap.add_argument("--twitch", nargs="*", default=[], metavar="CANAL")
     ap.add_argument("--kick", nargs="*", default=[], metavar="CANAL")
@@ -663,6 +676,11 @@ def main():
                     help="borrar la grabación completa al terminar (los clips se conservan)")
     ap.add_argument("--verbose", action="store_true", help="imprimir cada bin")
     ap.add_argument("--demo", action="store_true", help="probar el detector con datos sintéticos")
+    return ap
+
+
+def main():
+    ap = crear_parser()
     a = ap.parse_args()
 
     if a.demo:

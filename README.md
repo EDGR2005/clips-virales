@@ -7,6 +7,7 @@ Herramientas en Python para convertir directos y videos largos en clips vertical
 | `monitor_directos.py` | Vigila el chat y la audiencia de un directo (Twitch / Kick) y avisa en qué rangos de tiempo hubo picos, o sea, posibles clips virales. |
 | `hacer_clips.py` | Corta un video en clips de 40 s, los pasa a vertical, los transcribe con Whisper, traduce si hace falta y pega los subtítulos. |
 | `descargar_picos.py` | Baja desde el VOD de Twitch los picos que anotó el monitor. |
+| `panel.py` | Panel web para añadir, pausar y quitar canales del monitor desde el navegador. Pensado para dejarlo en un VPS. |
 | `seguir_caras.py` | Reencuadre vertical que sigue a la persona que habla (se usa desde `hacer_clips.py` con `--seguir-caras` o por separado). |
 | `docs/guia_manual.md` | Guía paso a paso con comandos sueltos de yt-dlp, FFmpeg y Whisper. |
 
@@ -262,6 +263,89 @@ python3 descargar_picos.py --canal nombre_canal --calidad "best[height<=720]" --
 - Se puede ejecutar varias veces. Los clips que ya existen se saltan, así que solo baja los picos nuevos.
 - Necesita que el canal guarde VODs. Si los tiene desactivados, usa `--grabar` en el monitor.
 - Por ahora solo funciona con Twitch.
+
+### 5.3 Panel web (`panel.py`)
+
+Hace lo mismo que `monitor_directos.py`, pero los canales se manejan desde el navegador en vez de por línea de comandos. Puedes añadir varios canales de Twitch y Kick, pausarlos, reanudarlos o quitarlos sin reiniciar nada. La página muestra en vivo los mensajes, espectadores y puntaje de cada canal y los últimos picos, y permite descargar `picos.jsonl`.
+
+```bash
+export PANEL_CLAVE="una-contraseña-larga"
+python3 panel.py                 # http://127.0.0.1:8080
+```
+
+El navegador pide usuario y contraseña. El usuario puede ser cualquiera; solo se comprueba la contraseña de `PANEL_CLAVE` (mínimo 10 caracteres).
+
+| Opción | Por defecto | Qué hace |
+|---|---|---|
+| `--host` | `127.0.0.1` | Dirección donde escucha. `127.0.0.1` solo acepta conexiones de la misma máquina. |
+| `--port` | `8080` | Puerto. |
+| `--umbral` | `3.0` | Sensibilidad del detector, igual que en el monitor. |
+| `--salida` | `picos` | Carpeta de `picos.jsonl` y los CSV. |
+| `--estado` | `panel_canales.json` | Dónde se guarda la lista de canales. |
+| `--sin-clave` | apagado | No pide contraseña. Solo se permite con `--host 127.0.0.1`. |
+
+- La lista de canales y si están pausados se guarda en `panel_canales.json`. Si el panel se reinicia, retoma los canales activos.
+- El panel no graba (`--grabar`). Está pensado para un VPS que solo detecta; las descargas se hacen en tu PC con `descargar_picos.py`.
+- Pausar un canal con un pico en curso lo anota en `picos.jsonl` igual que `Ctrl+C`.
+
+#### En un VPS
+
+Instalación (Ubuntu/Debian):
+
+```bash
+sudo apt update && sudo apt install -y git python3-venv
+git clone https://github.com/EDGR2005/clips-virales.git
+cd clips-virales
+python3 -m venv .venv
+.venv/bin/pip install websockets curl_cffi aiohttp
+```
+
+Servicio de systemd para que arranque solo y se reinicie si falla. Crea `/etc/systemd/system/panel-clips.service` (cambia `usuario` y la contraseña):
+
+```ini
+[Unit]
+Description=Panel del monitor de directos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=usuario
+WorkingDirectory=/home/usuario/clips-virales
+Environment=PANEL_CLAVE=una-contraseña-larga
+ExecStart=/home/usuario/clips-virales/.venv/bin/python -u panel.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo chmod 600 /etc/systemd/system/panel-clips.service   # la contraseña está dentro
+sudo systemctl daemon-reload
+sudo systemctl enable --now panel-clips
+journalctl -u panel-clips -f        # ver la salida
+```
+
+Cómo entrar al panel desde tu PC. Hay dos opciones:
+
+1. **Túnel SSH (recomendado, no expone nada a internet).** El panel sigue en `127.0.0.1` del VPS. En tu PC:
+
+   ```bash
+   ssh -N -L 8080:127.0.0.1:8080 usuario@IP_DEL_VPS
+   ```
+
+   Mientras ese comando esté abierto, entra en `http://localhost:8080`.
+
+2. **Dominio con HTTPS.** Si quieres entrar desde el móvil u otro sitio sin SSH, pon delante un proxy con HTTPS, por ejemplo [Caddy](https://caddyserver.com/docs/quick-starts/reverse-proxy). Con un dominio apuntando al VPS, basta con `sudo caddy reverse-proxy --from tu-dominio.com --to 127.0.0.1:8080`. No abras el puerto 8080 directamente con `--host 0.0.0.0`: sin HTTPS, la contraseña viaja sin cifrar.
+
+Para traer los picos a tu PC, usa el enlace **Descargar picos.jsonl** del panel o `rsync`, y luego:
+
+```bash
+python3 descargar_picos.py --jsonl ruta/a/picos.jsonl --canal nombre_canal
+```
+
+Actualizar el código del VPS: `git pull && sudo systemctl restart panel-clips`.
 
 ## 6. Del pico al clip final
 
