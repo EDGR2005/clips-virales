@@ -400,9 +400,12 @@ def main():
         if not es_local(a.host):
             sys.exit("--sin-clave solo se permite escuchando en 127.0.0.1")
         clave = None
-    elif not clave or len(clave) < 10:
-        sys.exit("Define la contraseña del panel (10+ caracteres):\n"
-                 '    export PANEL_CLAVE="una-contraseña-larga"')
+    elif not clave:
+        sys.exit("Falta la contraseña del panel. Defínela (10+ caracteres) en PANEL_CLAVE:\n"
+                 '    export PANEL_CLAVE="una-contraseña-larga"   (o en .env si usas Docker)')
+    elif len(clave) < 10:
+        sys.exit(f"PANEL_CLAVE tiene {len(clave)} caracteres; el mínimo es 10. "
+                 "Usa una más larga.")
     # En Docker escucha en 0.0.0.0 dentro del contenedor, pero compose solo
     # publica el puerto en 127.0.0.1 del host: ahí el aviso no aplica.
     if not es_local(a.host) and not os.environ.get("PANEL_EN_CONTENEDOR"):
