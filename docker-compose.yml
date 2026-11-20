@@ -1,0 +1,25 @@
+services:
+  panel:
+    build: .
+    image: clips-virales-panel
+    container_name: clips-panel
+    restart: unless-stopped
+    env_file: .env                 # PANEL_CLAVE (y opcional TWITCH_CLIENT_ID/SECRET)
+    ports:
+      - "127.0.0.1:8080:8080"      # solo accesible desde el propio VPS (túnel SSH o proxy HTTPS)
+    volumes:
+      - ./datos:/data              # picos.jsonl, CSV y lista de canales
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

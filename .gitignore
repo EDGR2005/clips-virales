@@ -23,3 +23,7 @@ venv/
 
 # Estado del panel web
 panel_canales.json
+
+# Docker: secretos y datos del contenedor
+.env
+datos/

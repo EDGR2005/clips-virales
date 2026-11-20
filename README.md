@@ -288,7 +288,42 @@ El navegador pide usuario y contraseña. El usuario puede ser cualquiera; solo s
 - El panel no graba (`--grabar`). Está pensado para un VPS que solo detecta; las descargas se hacen en tu PC con `descargar_picos.py`.
 - Pausar un canal con un pico en curso lo anota en `picos.jsonl` igual que `Ctrl+C`.
 
-#### En un VPS
+#### En un VPS con Docker (recomendado)
+
+El contenedor aísla el panel del resto del servidor:
+- corre con un usuario sin privilegios (uid 10001);
+- su sistema de archivos es de solo lectura, salvo la carpeta de datos;
+- no tiene capacidades de Linux y tiene límites de memoria (256 MB) y procesos;
+- el puerto solo se publica en `127.0.0.1` del VPS, así que no queda expuesto a internet.
+
+La imagen solo lleva el panel y el monitor. No incluye Whisper, mediapipe ni ffmpeg, y ocupa unos 260 MB.
+
+Requiere Docker con el plugin Compose (`sudo apt install docker.io docker-compose-v2` en Ubuntu, o la [instalación oficial](https://docs.docker.com/engine/install/)).
+
+```bash
+sudo mkdir -p /opt/clips-virales && sudo chown "$USER":"$USER" /opt/clips-virales
+git clone https://github.com/EDGR2005/clips-virales.git /opt/clips-virales
+cd /opt/clips-virales
+
+cp .env.example .env
+nano .env                                   # pon tu contraseña en PANEL_CLAVE
+chmod 600 .env
+
+mkdir -p datos && sudo chown 10001:10001 datos   # el contenedor escribe aquí
+docker compose up -d --build
+docker compose logs -f                      # ver la salida (Ctrl+C solo cierra la vista)
+```
+
+- Los datos quedan en `/opt/clips-virales/datos/`: `picos/picos.jsonl`, los CSV y `panel_canales.json`. Sobreviven a reinicios y a recrear el contenedor.
+- El contenedor arranca solo al encender el VPS (`restart: unless-stopped`).
+- Para entrar, usa el mismo túnel SSH o proxy HTTPS de más abajo; el puerto sigue siendo el 8080.
+- Actualizar: `git pull && docker compose up -d --build`.
+- Parar: `docker compose down` (los datos se conservan).
+- Traer los picos a tu PC: el enlace del panel, o `rsync -av usuario@IP_DEL_VPS:/opt/clips-virales/datos/picos/ picos_vps/`.
+
+Si al arrancar ves `Permission denied` en `/data`, falta el `chown 10001:10001 datos`.
+
+#### En un VPS sin Docker
 
 Instalación (Ubuntu/Debian):
 

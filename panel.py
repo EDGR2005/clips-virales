@@ -403,7 +403,9 @@ def main():
     elif not clave or len(clave) < 10:
         sys.exit("Define la contraseña del panel (10+ caracteres):\n"
                  '    export PANEL_CLAVE="una-contraseña-larga"')
-    if not es_local(a.host):
+    # En Docker escucha en 0.0.0.0 dentro del contenedor, pero compose solo
+    # publica el puerto en 127.0.0.1 del host: ahí el aviso no aplica.
+    if not es_local(a.host) and not os.environ.get("PANEL_EN_CONTENEDOR"):
         print("Aviso: el panel es accesible desde fuera. Sin HTTPS la contraseña viaja "
               "sin cifrar; usa un túnel SSH o un proxy con HTTPS (ver README).")
 
