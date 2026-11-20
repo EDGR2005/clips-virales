@@ -249,18 +249,23 @@ Si monitoreaste sin `--grabar`, este script baja los picos de `picos/picos.jsonl
 python3 descargar_picos.py                         # todos los canales de Twitch del jsonl
 python3 descargar_picos.py --canal nombre_canal
 python3 descargar_picos.py --canal nombre_canal --calidad "best[height<=720]" --margen 5
+python3 descargar_picos.py --jsonl ruta/picos.jsonl --top 4   # solo los 4 mejores de cada canal
 ```
 
 | Opción | Por defecto | Qué hace |
 |---|---|---|
 | `--canal` | todos | Solo los picos de ese canal. |
+| `--top N` | todos | Solo los N picos con más puntaje de cada canal. |
 | `--calidad` | `best[height<=1080]/best` | Formato de yt-dlp. |
 | `--margen` | `0` | Segundos extra antes y después de cada pico. |
 | `--fecha AAAA-MM-DD` | hoy | Día de los picos, solo para registros antiguos sin fecha. |
 | `--cookies-from-browser` | | Para VODs solo de suscriptores (ej. `firefox`). |
 | `--salida` | `picos/clips` | Carpeta de los clips. |
 
-- Se puede ejecutar varias veces. Los clips que ya existen se saltan, así que solo baja los picos nuevos.
+- Se puede ejecutar varias veces. Los clips que ya existen se saltan, así que solo baja los picos nuevos. Los archivos de 10 KB o menos (descargas fallidas) se vuelven a bajar.
+- Baja directamente los segmentos HLS del VOD que cubren el pico y los corta con ffmpeg sin recodificar. `yt-dlp --download-sections` genera MP4 vacíos con los VODs nuevos de Twitch (fMP4).
+- Si Twitch silenció un tramo por copyright, el script avisa con `⚠ SIN AUDIO`. Ese clip se baja igual, pero sin sonido.
+- Mientras el canal está en directo, a veces el VOD no aparece hasta que termina. Si falla, vuelve a intentarlo cuando acabe el directo.
 - Necesita que el canal guarde VODs. Si los tiene desactivados, usa `--grabar` en el monitor.
 - Por ahora solo funciona con Twitch.
 
